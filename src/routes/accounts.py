@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 
 from config import get_jwt_auth_manager, get_settings, BaseAppSettings
 from database import (
@@ -98,17 +98,17 @@ async def activate_user(
             detail="Invalid or expired activation token.",
         )
 
-    if cast(datetime, cast(object, db_token.expires_at)).replace(
-        tzinfo=timezone.utc
-    ) < datetime.now(timezone.utc):
-        await db.delete(db_token)
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired activation token.",
-        )
-
     try:
+        if cast(datetime, cast(object, db_token.expires_at)).replace(
+            tzinfo=timezone.utc
+        ) < datetime.now(timezone.utc):
+            await db.delete(db_token)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired activation token.",
+            )
+
         user.is_active = True
         await db.delete(db_token)
         await db.commit()
@@ -128,13 +128,19 @@ async def password_reset_request(
         select(UserModel).where(UserModel.email == credentials.email)
     )
     if user and user.is_active:
-        await db.execute(
-            delete(PasswordResetTokenModel).where(
-                PasswordResetTokenModel.user_id == user.id
+        try:
+            await db.execute(
+                delete(PasswordResetTokenModel).where(
+                    PasswordResetTokenModel.user_id == user.id
+                )
             )
-        )
-        db.add(PasswordResetTokenModel(user_id=user.id))
-        await db.commit()
+            db.add(PasswordResetTokenModel(user_id=user.id))
+            await db.commit()
+        except SQLAlchemyError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while processing the request.",
+            )
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."
     )
@@ -157,25 +163,27 @@ async def password_reset_complete(
         .where(PasswordResetTokenModel.user_id == user.id)
         .with_for_update()
     )
-    if (
-        not db_token
-        or db_token.token != credentials.token
-        or cast(datetime, cast(object, db_token.expires_at)).replace(
-            tzinfo=timezone.utc
-        )
-        < datetime.now(timezone.utc)
-    ):
-        await db.execute(
-            delete(PasswordResetTokenModel).where(
-                PasswordResetTokenModel.user_id == user.id
-            )
-        )
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
-        )
 
     try:
+        if (
+            not db_token
+            or db_token.token != credentials.token
+            or cast(datetime, cast(object, db_token.expires_at)).replace(
+                tzinfo=timezone.utc
+            )
+            < datetime.now(timezone.utc)
+        ):
+            await db.execute(
+                delete(PasswordResetTokenModel).where(
+                    PasswordResetTokenModel.user_id == user.id
+                )
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid email or token.",
+            )
+
         user.password = credentials.password
         await db.delete(db_token)
         await db.commit()
@@ -238,7 +246,7 @@ async def login_user(
 @router.post("/refresh/", response_model=TokenRefreshResponseSchema)
 async def refresh_access_token(
     user_token: TokenRefreshRequestSchema,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
 ):
     refresh_token = user_token.refresh_token
