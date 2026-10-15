@@ -113,6 +113,7 @@ async def activate_user(
         await db.delete(db_token)
         await db.commit()
         return MessageResponseSchema(message="User account activated successfully.")
+
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -141,6 +142,7 @@ async def password_reset_request(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while processing the request.",
             )
+
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."
     )
@@ -188,6 +190,7 @@ async def password_reset_complete(
         await db.delete(db_token)
         await db.commit()
         return MessageResponseSchema(message="Password reset successfully.")
+
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
